@@ -1,0 +1,99 @@
+name: Build Super_Duper_Browser from Google Drive Link (.JAR & .JAD)
+
+on:
+  push:
+    branches: [ "*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-j2me:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download & Extract ZIP from Public Google Drive Link
+        run: |
+          curl -L "https://drive.google.com/uc?export=download&id=1B0J73DMnLsSb_TDHdeQEyfQpnJOnXVwf" -o Super_Duper_Browser_Project.zip
+          unzip -o Super_Duper_Browser_Project.zip
+
+      - name: Setup Java JDK 8 (J2ME Compatible)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "8"
+
+      - name: Compile J2ME API Stubs (MIDP-2.0 / CLDC-1.1 / JSR-75)
+        run: |
+          mkdir -p build/stubs build/classes
+          find j2me-stubs -name "*.java" > stubs_sources.txt
+          javac -source 1.4 -target 1.4 -d build/stubs @stubs_sources.txt
+
+      - name: Compile SuperDuperBrowser MIDlet Source
+        run: |
+          javac -source 1.4 -target 1.4 -classpath build/stubs -d build/classes src/SuperDuperBrowser.java
+          cp res/icon.png build/classes/icon.png
+
+      - name: Optional ProGuard J2ME Preverification (StackMap Injection)
+        run: |
+          sudo apt-get update && sudo apt-get install -y proguard-cli || true
+          if command -v proguard >/dev/null 2>&1; then
+            mkdir -p build/preverified
+            jar cvf build/raw.jar -C build/classes .
+            proguard -microedition \
+              -injars build/raw.jar \
+              -outjars build/preverified.jar \
+              -libraryjars build/stubs \
+              -dontshrink -dontoptimize -dontobfuscate \
+              -keep "public class SuperDuperBrowser { public protected *; }" \
+              -keep "class * { *; }" || true
+            if [ -f "build/preverified.jar" ]; then
+              rm -rf build/classes/*
+              unzip -o build/preverified.jar -d build/classes/
+              rm -rf build/classes/META-INF
+              cp res/icon.png build/classes/icon.png
+            fi
+          fi
+
+      - name: Package Super_Duper_Browser.jar & Generate Exact .jad
+        run: |
+          mkdir -p dist
+          jar cvfm dist/Super_Duper_Browser.jar res/MANIFEST.MF -C build/classes .
+          JAR_SIZE=$(stat -c%s dist/Super_Duper_Browser.jar)
+          printf "MIDlet-Name: Super Duper Browser\n" > dist/Super_Duper_Browser.jad
+          printf "MIDlet-Version: 2.0.0\n" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-Vendor: SuperDuper Privacy Labs\n" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-Jar-URL: Super_Duper_Browser.jar\n" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-Jar-Size: %s\n" "${JAR_SIZE}" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-1: Super Duper Browser, /icon.png, SuperDuperBrowser\n" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-Icon: /icon.png\n" >> dist/Super_Duper_Browser.jad
+          printf "MicroEdition-Profile: MIDP-2.0\n" >> dist/Super_Duper_Browser.jad
+          printf "MicroEdition-Configuration: CLDC-1.1\n" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-Description: 8-10kbps Ultra Data Saver & Privacy Browser\n" >> dist/Super_Duper_Browser.jad
+          printf "MIDlet-Permissions: javax.microedition.io.Connector.http, javax.microedition.io.Connector.https, javax.microedition.io.Connector.file.read, javax.microedition.io.Connector.file.write\n" >> dist/Super_Duper_Browser.jad
+
+      - name: Upload Compiled .JAR and .JAD Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Super_Duper_Browser_J2ME_Release
+          path: |
+            dist/Super_Duper_Browser.jar
+            dist/Super_Duper_Browser.jad
+
+      - name: Publish Automatic GitHub Release (1-Tap Mobile Download)
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == "push" || github.event_name == "workflow_dispatch"
+        with:
+          tag_name: v2.0-latest
+          name: "Super Duper Browser v2.0 (Ready .JAR & .JAD)"
+          body: |
+            ### Super_Duper_Browser v2.0 (8-10kbps Ultra Data Saver & Privacy Edition)
+            Niche **Assets** mein tap karke direct **Super_Duper_Browser.jar** aur **Super_Duper_Browser.jad** apne mobile mein download karein!
+          files: |
+            dist/Super_Duper_Browser.jar
+            dist/Super_Duper_Browser.jad
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
